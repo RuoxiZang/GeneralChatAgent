@@ -18,20 +18,32 @@ client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
 # =================模块一：搜索工具 (Search Capability)=================
 class SearchTool:
-    def __init__(self, client: OpenAI, top_k: int = 3):
+    def __init__(self, client: OpenAI, top_k: int = 3, kb_path: str = "knowledge_base.txt"):
         self.client = client
         self.top_k = top_k
-        # 模拟本地文档库
-        self.knowledge_base = [
-            "DeepInfra 提供高性价比的 LLM 推理 API 服务。",
-            "Python 3.12 引入了更快的解释器和改进的 f-string 解析。",
-            "Agent 的记忆机制通常分为短期记忆（上下文）和长期记忆（用户画像）。",
-            "今天是星期二，天气晴朗。",
-            "用户张三喜欢吃川菜，尤其是麻婆豆腐。"
-        ]
+        
+        # 从本地文件加载知识库
+        print(f"[System] 正在从 {kb_path} 加载知识库...")
+        self.knowledge_base = self._load_knowledge_base(kb_path)
+        print(f"[System] 已加载 {len(self.knowledge_base)} 条知识。")
+        
         print("[System] 正在为知识库建立索引（计算向量）...")
         self.doc_vectors = [self._get_embedding(doc) for doc in self.knowledge_base]
         print("[System] 索引建立完成。")
+    
+    def _load_knowledge_base(self, file_path: str) -> List[str]:
+        """从txt文件加载知识库，每行一条知识"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                # 读取所有行，去除空白行
+                lines = [line.strip() for line in f.readlines() if line.strip()]
+            return lines
+        except FileNotFoundError:
+            print(f"[Warning] 未找到知识库文件 {file_path}，使用空知识库。")
+            return []
+        except Exception as e:
+            print(f"[Error] 读取知识库文件失败: {e}")
+            return []
         
     def _get_embedding(self, text: str) -> List[float]:
         """调用 API 获取文本向量"""
