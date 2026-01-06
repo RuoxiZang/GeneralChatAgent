@@ -3,7 +3,7 @@ import json
 from openai import OpenAI
 from typing import List, Dict
 from dotenv import load_dotenv
-
+import numpy as np
 # 加载 .env 文件
 load_dotenv()
 
@@ -13,12 +13,14 @@ API_KEY = os.getenv("DEEPINFRA_API_KEY", "YOUR_DEEPINFRA_API_KEY")
 BASE_URL = os.getenv("DEEPINFRA_BASE_URL", "https://api.deepinfra.com/v1/openai")
 # 推荐使用 Llama-3-70B 或 Qwen-2.5-72B 等指令遵循能力强的模型
 MODEL_NAME = "meta-llama/Meta-Llama-3.1-70B-Instruct" 
-
+EMBEDDING_MODEL = "BAAI/bge-m3"
 client = OpenAI(api_key=API_KEY, base_url=BASE_URL)
 
 # =================模块一：搜索工具 (Search Capability)=================
 class SearchTool:
-    def __init__(self):
+    def __init__(self, client: OpenAI, top_k: int = 3):
+        self.client = client
+        self.top_k = top_k
         # 模拟本地文档库
         self.knowledge_base = [
             "DeepInfra 提供高性价比的 LLM 推理 API 服务。",
@@ -27,20 +29,72 @@ class SearchTool:
             "今天是星期二，天气晴朗。",
             "用户张三喜欢吃川菜，尤其是麻婆豆腐。"
         ]
+        print("[System] 正在为知识库建立索引（计算向量）...")
+        self.doc_vectors = [self._get_embedding(doc) for doc in self.knowledge_base]
+        print("[System] 索引建立完成。")
+        
+    def _get_embedding(self, text: str) -> List[float]:
+        """调用 API 获取文本向量"""
+        try:
+            # 注意：不同模型对换行符敏感，通常建议替换为空格
+            text = text.replace("\n", " ")
+            response = self.client.embeddings.create(
+                input=[text],
+                model=EMBEDDING_MODEL
+            )
+            return response.data[0].embedding
+        except Exception as e:
+            print(f"[Embedding Error] {e}")
+            return []
 
+    def _cosine_similarity(self, a, b):
+        """计算余弦相似度"""
+        return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+    
     def search(self, query: str) -> str:
-        """简单的关键词匹配搜索"""
-        print(f"\n[System] 正在搜索: {query} ...")
+        # """简单的关键词匹配搜索"""
+        # print(f"\n[System] 正在搜索: {query} ...")
+        # results = []
+        # # print("[Debug] Knowledge Base:", self.knowledge_base)
+        # for doc in self.knowledge_base:
+        #     if any(word in doc for word in query.split()):
+        #         results.append(doc)
+        # # print(f"[System] 搜索完成，找到 {len(results)} 条结果。\n")
+        # if results:
+        #     return "搜索结果:\n" + "\n".join([f"- {r}" for r in results])
+        # else:
+        #     return "搜索结果: 未找到相关本地信息。"
+        """基于向量相似度的语义搜索"""
+        print(f"\n[System] 正在进行语义搜索: {query} ...")
+        
+        # 1. 获取查询词的向量
+        query_vector = self._get_embedding(query)
+        if not query_vector:
+            return "搜索服务暂时不可用。"
+
+        # 2. 计算与知识库中每一条的相似度
+        scores = []
+        for doc_vec in self.doc_vectors:
+            score = self._cosine_similarity(query_vector, doc_vec)
+            scores.append(score)
+
+        # 3. 排序并获取索引 (从高到低)
+        # argsort 返回的是从小到大的索引，所以我们取最后 top_k 个并反转
+        top_indices = np.argsort(scores)[-self.top_k:][::-1]
+
         results = []
-        # print("[Debug] Knowledge Base:", self.knowledge_base)
-        for doc in self.knowledge_base:
-            if any(word in doc for word in query.split()):
-                results.append(doc)
-        # print(f"[System] 搜索完成，找到 {len(results)} 条结果。\n")
+        # 设定一个相似度阈值，太低的相关性不如不返回 (例如 0.4)
+        threshold = 0.4 
+        
+        for idx in top_indices:
+            score = scores[idx]
+            if score > threshold:
+                results.append(f"{self.knowledge_base[idx]} (相似度: {score:.2f})")
+        
         if results:
-            return "搜索结果:\n" + "\n".join([f"- {r}" for r in results])
+            return "搜索结果(按相关性排序):\n" + "\n".join([f"- {r}" for r in results])
         else:
-            return "搜索结果: 未找到相关本地信息。"
+            return "搜索结果: 未找到足够相关的本地信息。"
 
 # =================模块二：记忆系统 (Memory System)=================
 class MemoryManager:
@@ -94,7 +148,7 @@ class MemoryManager:
 class UniversalAgent:
     def __init__(self):
         self.memory = MemoryManager(max_context_turns=3)
-        self.search_tool = SearchTool()
+        self.search_tool = SearchTool(client)
 
     def _construct_system_prompt(self) -> str:
         """构建动态 System Prompt，注入长期记忆和工具说明"""
